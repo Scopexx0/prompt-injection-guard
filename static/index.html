@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt-Injection Guard — Demo</title>
+<style>
+  :root { color-scheme: dark; }
+  body { font-family: system-ui, sans-serif; background:#0f1419; color:#e6edf3; margin:0; }
+  main { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  p.sub { color:#8b98a5; margin-top: 0; }
+  textarea { width:100%; min-height:110px; background:#161c22; color:#e6edf3; border:1px solid #2d3741;
+             border-radius:8px; padding:10px; font-size:0.95rem; box-sizing:border-box; }
+  button { background:#1f6feb; color:#fff; border:0; border-radius:6px; padding:8px 14px;
+           cursor:pointer; font-size:0.9rem; }
+  button.sample { background:#212a33; color:#c9d4de; border:1px solid #2d3741; margin:0 6px 6px 0; }
+  button.sample.attack { border-color:#5a2b2b; }
+  .row { display:flex; gap:16px; flex-wrap:wrap; margin-top:14px; align-items:center; }
+  #result { margin-top:20px; border:1px solid #2d3741; border-radius:8px; padding:16px; display:none; }
+  .badge { font-weight:700; padding:3px 12px; border-radius:999px; text-transform:uppercase; font-size:0.85rem; }
+  .allow { background:#14532d; color:#86efac; }
+  .flag  { background:#713f12; color:#fde68a; }
+  .block { background:#5f1d1d; color:#fca5a5; }
+  .bar { height:12px; background:#212a33; border-radius:6px; overflow:hidden; margin:10px 0 4px; }
+  .fill { height:100%; width:0%; transition: width .3s; }
+  ul { margin:8px 0 0; padding-left:20px; }
+  li { margin-bottom:4px; }
+  .detector { color:#7dd3fc; font-family: ui-monospace, monospace; font-size:0.85rem; }
+  .muted { color:#8b98a5; font-size:0.85rem; }
+  .samples { margin-top:18px; }
+  h3 { margin: 12px 0 6px; font-size: 0.95rem; color:#8b98a5; text-transform: uppercase; letter-spacing: .04em; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🛡️ Prompt-Injection Guard</h1>
+  <p class="sub">Two-layer detection demo: heuristic pattern detectors + a statistical scorer.
+     See the verdict, risk score, and exactly which detectors fired.</p>
+
+  <h3 style="margin-top:18px">✍️ Try your own prompt</h3>
+  <p class="sub" style="margin-bottom:8px">Type or paste any prompt — your best injection attempt,
+     or a normal request — and score it yourself:</p>
+  <textarea id="prompt" placeholder="Type or paste your own prompt here…"></textarea>
+  <div class="row">
+    <button id="scoreBtn">Score this prompt</button>
+    <span class="muted" id="charCount"></span>
+  </div>
+
+  <div class="samples">
+    <h3>🎯 One-click attack presets — watch them get flagged / blocked</h3>
+    <div id="attackSamples"></div>
+    <h3>✅ Benign presets — normal prompts that pass</h3>
+    <div id="benignSamples"></div>
+  </div>
+
+  <div id="result">
+    <div class="row" style="margin-top:0">
+      <span class="badge" id="verdictBadge">—</span>
+      <strong id="scoreText"></strong>
+    </div>
+    <div class="bar"><div class="fill" id="scoreFill"></div></div>
+    <div class="muted" id="subScores"></div>
+    <h3>Detectors fired</h3>
+    <ul id="findings"></ul>
+  </div>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const colors = { allow: '#22c55e', flag: '#eab308', block: '#ef4444' };
+
+async function loadSamples() {
+  const data = await (await fetch('/api/samples')).json();
+  for (const [kind, el] of [['attacks', $('attackSamples')], ['benign', $('benignSamples')]]) {
+    data[kind].forEach(s => {
+      const b = document.createElement('button');
+      b.className = 'sample' + (kind === 'attacks' ? ' attack' : '');
+      b.textContent = s.label;
+      b.onclick = () => { $('prompt').value = s.text; updateCount(); score(); };
+      el.appendChild(b);
+    });
+  }
+}
+
+function updateCount() { $('charCount').textContent = $('prompt').value.length + ' chars'; }
+
+async function score() {
+  const text = $('prompt').value;
+  if (!text.trim()) return;
+  const resp = await fetch('/api/score', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt: text })
+  });
+  if (!resp.ok) { alert('Error: ' + resp.status + ' ' + (await resp.text())); return; }
+  const r = await resp.json();
+  $('result').style.display = 'block';
+  const badge = $('verdictBadge');
+  badge.textContent = r.verdict;
+  badge.className = 'badge ' + r.verdict;
+  $('scoreText').textContent = 'Risk score: ' + r.score + ' / 100';
+  const fill = $('scoreFill');
+  fill.style.width = r.score + '%';
+  fill.style.background = colors[r.verdict];
+  $('subScores').textContent =
+    'Heuristic layer: ' + r.heuristic_score + '/100 · Statistical layer: ' + r.statistical_score + '/100';
+  const ul = $('findings');
+  ul.innerHTML = '';
+  if (r.findings.length === 0) {
+    ul.innerHTML = '<li class="muted">None — no known injection pattern matched.</li>';
+  } else {
+    r.findings.forEach(f => {
+      const li = document.createElement('li');
+      li.innerHTML = '<span class="detector">' + f.detector + '</span> — ' + f.reason + ' (+' + f.points + ')';
+      ul.appendChild(li);
+    });
+  }
+}
+
+$('scoreBtn').onclick = score;
+$('prompt').addEventListener('input', updateCount);
+loadSamples();
+</script>
+</body>
+</html>
